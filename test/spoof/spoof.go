@@ -35,8 +35,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 
-	"go.opencensus.io/plugin/ochttp"
-	"go.opencensus.io/plugin/ochttp/propagation/b3"
 	"go.opencensus.io/trace"
 )
 
@@ -91,19 +89,23 @@ type SpoofingClient struct {
 	logger *logging.BaseLogger
 }
 
+func NewForEndpoint(logger *logging.BaseLogger, endpoint string, domain string) *SpoofingClient {
+	return &SpoofingClient{
+		Client:          http.DefaultClient,
+		RequestInterval: requestInterval,
+		RequestTimeout:  requestTimeout,
+		endpoint:        endpoint,
+		domain:          domain,
+		logger:          logger,
+	}
+}
+
 // New returns a SpoofingClient that rewrites requests if the target domain is not `resolveable`.
 // It does this by looking up the ingress at construction time, so reusing a client will not
 // follow the ingress if it moves (or if there are multiple ingresses).
 //
 // If that's a problem, see test/request.go#WaitForEndpointState for oneshot spoofing.
 func New(kubeClientset *kubernetes.Clientset, logger *logging.BaseLogger, domain string, resolvable bool) (*SpoofingClient, error) {
-	sc := SpoofingClient{
-		Client:          &http.Client{Transport: &ochttp.Transport{Propagation: &b3.HTTPFormat{}}}, // Using ochttp Transport required for zipkin-tracing
-		RequestInterval: requestInterval,
-		RequestTimeout:  requestTimeout,
-		logger:          logger,
-	}
-
 	if !resolvable {
 		// If the domain that the Route controller is configured to assign to Route.Status.Domain
 		// (the domainSuffix) is not resolvable, we need to retrieve the IP of the endpoint and
@@ -113,14 +115,11 @@ func New(kubeClientset *kubernetes.Clientset, logger *logging.BaseLogger, domain
 			return nil, err
 		}
 
-		sc.endpoint = *e
-		sc.domain = domain
-	} else {
-		// If the domain is resolvable, we can use it directly when we make requests.
-		sc.endpoint = domain
+		return NewForEndpoint(logger, *e /* endpoint */, domain), nil
 	}
 
-	return &sc, nil
+	// If the domain is resolvable, we can use it directly when we make requests.
+	return NewForEndpoint(logger, domain /* endpoint */, "" /* domain */), nil
 }
 
 // GetServiceEndpoint gets the endpoint IP or hostname to use for the service
